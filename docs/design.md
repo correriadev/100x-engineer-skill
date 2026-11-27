@@ -71,7 +71,7 @@ Decisions columns. `ts phase decision why evidence result`, tab separated, appen
 
 ## CLI
 
-`100x init|install|config|clock|log|status|run|shots|port|prompt|ref|verify|brief|review-call|review-run|review-verify|helper|solo|triage|eval|report|finish|registry|morning|night|watchdog|upstream|browsers|text|doctor|validate`. Run `100x help` for flags.
+`100x init|install|config|clock|log|status|run|shots|port|prompt|ref|verify|workbench|brief|review-call|review-run|review-verify|helper|solo|triage|eval|report|finish|registry|morning|night|watchdog|upstream|browsers|text|doctor|validate`. Run `100x help` for flags.
 
 ## Guardrails
 

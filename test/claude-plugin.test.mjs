@@ -114,8 +114,8 @@ test('the README names every way the skills leave the machine or change a permis
   }
 });
 
-test('each script under skills/ ships as a Markdown file with the same code, and its skill says how to use it', () => {
-  const sources = listFiles(path.join(ROOT, 'skills')).filter((rel) => SCRIPT.test(rel));
+test('standalone JavaScript templates ship as Markdown, and Python tools run from the CLI package', () => {
+  const sources = listFiles(path.join(ROOT, 'skills')).filter((rel) => SCRIPT.test(rel) && !/^(project-mapper|new-scope|execute-scope|qa-scope)\//.test(rel));
   assert.ok(sources.length >= 6, 'the 100x skill carries its six templates');
   for (const rel of sources) {
     const copy = fs.readFileSync(path.join(dir, 'skills', `${rel}.md`), 'utf8');

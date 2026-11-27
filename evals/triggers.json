@@ -1,5 +1,6 @@
 {
   "version": 1,
+  "excluded_skills": ["project-mapper", "new-scope", "execute-scope", "qa-scope"],
   "about": "Routing prompts for the skill descriptions in skills/. A prompt is a message a person might send and the one skill that should load for it, or null for none. A prompt with a near field looks like that skill and belongs elsewhere. Tune prompts were written by the builder and are used to fix descriptions. Holdout prompts were written by a model that never saw a description, are scored once, and a second look at the same set is a tuned set. Run 100x eval triggers stage to get what a model answers from.",
   "distractors": [
     {"name": "api-docs", "description": "Use when the user wants an API reference written or refreshed: OpenAPI specs, endpoint pages, request and response examples. Reads the routes and handlers and keeps the docs in step with them."},

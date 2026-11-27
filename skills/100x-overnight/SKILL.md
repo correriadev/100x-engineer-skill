@@ -4,9 +4,9 @@ description: "Use for /100x-overnight, or when the owner is leaving and wants fi
 license: MIT
 compatibility: "Needs the 100x command line tool on PATH (Node 22 or newer, and git) and the other skills of the 100x suite that this one names. Install the tool as the repository README says. Browser checks use Playwright, which `100x browsers` installs."
 metadata:
-  author: "DeadInternetStudios"
+  author: "correriadev"
   version: "0.1.0"
-  repository: "https://github.com/DeadInternetStudios/100x-engineer-skill"
+  repository: "https://github.com/correriadev/100x-engineer-skill"
 ---
 
 # Overnight

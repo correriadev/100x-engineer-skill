@@ -4,12 +4,18 @@ description: "Use when the owner types 100x, with or without a brief, or asks fo
 license: MIT
 compatibility: "Needs the 100x command line tool on PATH (Node 22 or newer, and git) and the other skills of the 100x suite that this one names. Install the tool as the repository README says. Browser checks use Playwright, which `100x browsers` installs."
 metadata:
-  author: "DeadInternetStudios"
+  author: "correriadev"
   version: "0.1.0"
-  repository: "https://github.com/DeadInternetStudios/100x-engineer-skill"
+  repository: "https://github.com/correriadev/100x-engineer-skill"
 ---
 
 # 100x
+
+## Engineering work
+
+For a feature, fix, test or procedure, follow `references/engineering.md`:
+select direct or planned work and use that workflow instead of the prototype
+stages. Keep explicit exploration modes for their intended use.
 
 One thread, one run, one prototype worth keeping. The owner starts many projects and drops most of them because they never become impressive fast enough. 100x makes the first version impressive, then makes it correct where it matters, then proves both. They test it when they come back.
 
@@ -90,7 +96,7 @@ Done when you have sent the pre-flight, saved it in `project.md` and logged the 
    - **New project.** Build it from scratch on the main branch. Work in the current folder when it is empty or holds only the brief. Otherwise create `./<slug>/`, `cd` into it and work there. The slug is the goal in at most four lowercase words joined by hyphens, like `tip-splitter`. Make it once and reuse it for the folder, the branch and the log id.
    - **Big change** to a repo with history. Work on branch `100x/<slug>`, stage only files you changed, and leave the owner's uncommitted files untouched.
    - **Small edit.** Make it, run the project's own check once, commit, reply in three lines. Stop. The pipeline is for work that deserves it.
-3. `100x init` in the folder you settled on. It makes `.100x/`, keeps it out of git and prints the stack, the run command and the deploy hints it can find. An empty folder has none yet, so step 5 sets them. When it says an earlier run is already here, this brief is a new run: `100x init --fresh` moves the old run's files and stage tags aside and starts clean. If the shell cannot find `100x`, call `~/.100x/bin/100x`. If that is missing and this skill sits in a checkout of the repo, run `scripts/install.sh` from it, two folders above the real path of this skill (`readlink -f` on its folder). Installed as the Claude plugin there is no checkout: tell the owner to run `npm install -g github:DeadInternetStudios/100x-engineer-skill` and then `100x install`.
+3. `100x init` in the folder you settled on. It makes `.100x/`, keeps it out of git and prints the stack, the run command and the deploy hints it can find. An empty folder has none yet, so step 5 sets them. When it says an earlier run is already here, this brief is a new run: `100x init --fresh` moves the old run's files and stage tags aside and starts clean. If the shell cannot find `100x`, call `~/.100x/bin/100x`. If that is missing and this skill sits in a checkout of the repo, run `scripts/install.sh` from it, two folders above the real path of this skill (`readlink -f` on its folder). Installed as the Claude plugin there is no checkout: tell the owner to run `npm install -g github:correriadev/100x-engineer-skill` and then `100x install`.
 4. Read `~/.100x/profile.md`, or `references/profile.default.md` when it does not exist. Read `100x config print`. Read the owner's rules and settle any major difference (`references/rules.md`).
 5. Write the prompt in `.100x/project.md`: the brief word for word, then the longer prompt the owner would have written, after reading what the brief names. Run `100x prompt check` and fix what it names. Decide and log inside the prompt, never ask. Everything it holds, and how to write it, is in `references/open.md`, `references/prompt.md` and `references/prompt-example.md`.
 6. Modifiers. Each number phrase becomes a `100x config set ... --local` line, a length of work becomes `100x clock set "<the owner's words>" --fill` and the watchdog, and `Mode: overnight` or `Grind: yes` is recorded when a mode skill sent you here. The exact commands are in `references/open.md`, and `3 versions` reads `references/variants.md`.

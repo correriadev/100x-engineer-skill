@@ -8,7 +8,7 @@ import { cli, ROOT } from './helpers.mjs';
 
 const read = (...parts) => fs.readFileSync(path.join(ROOT, ...parts), 'utf8');
 const skills = fs.readdirSync(path.join(ROOT, 'skills')).filter((name) => fs.existsSync(path.join(ROOT, 'skills', name, 'SKILL.md'))).sort();
-const modes = skills.filter((name) => name !== '100x');
+const modes = skills.filter((name) => name.startsWith('100x-'));
 
 test('every mode skill is in the README table, the router table, the router description and each prose list of the modes', () => {
   const readme = read('README.md');

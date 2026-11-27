@@ -14,7 +14,7 @@
 [![node: ≥ 22](docs/img/badges/node.svg)](https://nodejs.org/)
 [![license: MIT](docs/img/badges/license.svg)](LICENSE)
 ![status: beta](docs/img/badges/status.svg)
-[![Stars](https://img.shields.io/github/stars/DeadInternetStudios/100x-engineer-skill?style=social)](https://github.com/DeadInternetStudios/100x-engineer-skill/stargazers)
+[![Stars](https://img.shields.io/github/stars/correriadev/100x-engineer-skill?style=social)](https://github.com/correriadev/100x-engineer-skill/stargazers)
 
 *100x is a skill by a former Cursor engineer that turns prompts into formally verified, production-ready code.<br>I use it to ship over 1,000 PRs to production every month, with a rollback rate below 2%.*
 
@@ -32,7 +32,7 @@ Your agent says it's done. You open it and it *kinda* works. It always looks fin
 
 **100x makes your coding agent solve the last 10% of development.**
 
-**It splits the work into small blocks, formally verifies each one, then checks that the blocks work together.**
+It can model selected properties and check integration behavior where suitable evidence is available. A model only proves the properties and behavior represented by that model.
 
 <p align="center">
   <img src="docs/img/proof/tokens-30-days.jpg" width="420" alt="Daily token use from 23 Oct to 20 Nov: 136B tokens in 30 days, 1.6K local agents, 0 cloud agents">
@@ -48,9 +48,38 @@ It is an open-source skill for Claude Code, Cursor and Codex. Give it one job, l
 
 <!-- Benchmark headline goes here: one line and one picture, the same agent with and without 100x, with a link to the method. -->
 
+## Engineering workflow in this fork
+
+For engineering changes, 100x coordinates project understanding, planning, construction and acceptance in one workflow. Project Mapper and New Scope are also available independently. Execute Scope and QA Scope are optional entry points to the same execution protocol and QA contract; they do not require another complete build or review. Prototype, visual, solo and exploration modes remain available.
+
+- **Direct work:** for a bounded change, check authoring or execution of an existing procedure, inspect first and present the action plan before writes or effects. A map and formal contracts are optional. Report actual checks without claiming formal QA acceptance.
+- **Planned work:** for a change ID, planned execution or formal acceptance, use New Scope to define behavior, risks and acceptance, and plan QA obligations before the relevant implementation. Publish the revision-bound task plan; stale or missing contracts block the affected work.
+- **Review:** the existing 100x reviewer assesses the planned obligations and other material findings once. PASS, FAIL and INCONCLUSIVE reflect observed evidence and its limitations. Completion does not treat model checking, an exit code or the existence of a file as proof of unmodeled behavior.
+
+| Artifact | Owner and purpose |
+|---|---|
+| `.project-mapper/graph.sqlite` | Source-backed project knowledge, snapshot and coverage. Consult current source before making claims or edits. |
+| `docs/specs/<change-id>/context.sqlite` | Canonical intended change; `SCOPE.md` is its generated projection. |
+| `tasks.json` | Published tasks, dependencies, execution phases and evidence history. |
+| `qa.json` | Published evidence obligations and candidate assessments. |
+| `verify/ledger.tsv` | Separate property checks and their actual verification levels. |
+| `.100x/` | Run state, review materials, evidence artifacts and reports. |
+
+Run `100x workbench mapper . --offline coverage --summary` to inspect an existing map. Use `100x workbench scope <change-folder> --help` for New Scope and `100x workbench execute` or `100x workbench qa` for their contract tools. `100x workbench path mapper` locates the complete installed package, including the optional C# parser requirements. A requested map refresh pins a committed Git snapshot; use an explicit worktree map for uncommitted changes. Refresh reuses compatible static extraction; semantic reuse remains conservative when mapped inputs change.
+
+For a 100x report set `mode` to `engineering` and supply the direct or planned settings described in `100x ref engineering`. Headless work records why visual evidence is unnecessary and needs no screenshot. Visual work still requires its captures. Planned reports bind acceptance to the candidate, contracts, local artifact hashes and caller-confirmed environment identities. A reviewer must inspect the artifacts and assertions and independently observe the actual environment. Remote evidence needs a local snapshot within the task project. Fingerprinting excludes the change directory, `.100x`, map artifacts, Git metadata and dependency/cache directories except for declared task, check and source paths, and rejects source symlinks. It does not identify external services or running deployments; record those separately.
+
+Path confinement, meaningful RED and frozen tests are supervisor and worker protocols backed by contract preflight and post-action audits; they are not an operating-system sandbox. The host's own permissions and sandbox remain authoritative.
+
+Node.js 22+ is required for 100x. Mapping and planned engineering also need Python 3.12+, SQLite 3.37+ and Git. `X100_PYTHON` selects a Python executable. Browser dependencies are needed only for browser work; C# parsing requires the optional pinned dependencies in the Mapper package. `100x doctor` reports missing engineering requirements without disabling unrelated modes.
+
+Existing prototype runs retain their format. Existing copied skill installations are preserved, not overwritten: run `100x install --dry-run` and refresh the old copy with its original installer, or replace it deliberately before linking this fork. A planned assessment created before candidate and evidence-history binding must be reassessed for the engineering report. Generic property commands must now print `VERIFICATION_LEVEL: exhaustive`, `bounded`, or `sampled`; the bundled checker reports its level in text or JSON. A waiver whose covered contents change is stale until reassessed. See [engineering workflow](skills/100x/references/engineering.md) and [verification](docs/verification.md).
+
+The historical routing evaluation does not contain independent examples for the four imported Workbench skills, so its score is not evidence of their routing accuracy.
+
 ## Formal verification, one small block at a time
 
-Nobody formally verifies a whole app in one piece. But almost any well-designed software is made of small blocks, and a small block has things you can state exactly and check completely. 100x writes those down, checks every one, then checks that the blocks work together. It does this by default.
+Nobody formally verifies a whole app in one piece. Some properties of a small block can be stated precisely and checked against a model. The prototype workflow uses that approach by default; engineering work selects checks for its actual risks.
 
 ### Six questions for every block
 
@@ -71,7 +100,7 @@ The prompt answers all six in plain sentences. Then 100x builds a small model th
   <img src="docs/img/diagrams/verified-blocks.svg" width="520" alt="Small verified blocks. Each block states six properties and is checked on its own: split a bill, order, refund. The seams between blocks are checked. The real blocks then run together in one system model. The ledger marks a proof stale when the code under it changes.">
 </p>
 
-Each block is checked on its own, so a failure points at one small thing. The seams are checked too: what one block hands over has to meet the next block's rules. Then the real blocks run together in one model, and the checker visits every state of the whole. Checked blocks plus checked seams add up to software you can trust. The blocks do not prove the seams for free, so 100x checks both.
+Each modeled block can be checked on its own, and modeled seams can be checked together. These checks cover the modeled states, inputs and assumptions, not unmodeled integrations or runtime behavior.
 
 ### It stays true
 
@@ -318,15 +347,15 @@ Choose one:
 **npm**
 
 ```bash
-npm install -g github:DeadInternetStudios/100x-engineer-skill
+npm install -g github:correriadev/100x-engineer-skill
 100x install
 ```
 
 **skills.sh**
 
 ```bash
-npm install -g github:DeadInternetStudios/100x-engineer-skill
-npx skills add DeadInternetStudios/100x-engineer-skill --skill '*' -g
+npm install -g github:correriadev/100x-engineer-skill
+npx skills add correriadev/100x-engineer-skill --skill '*' -g
 100x install
 ```
 

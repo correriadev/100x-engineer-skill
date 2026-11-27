@@ -26,11 +26,19 @@ jobs:
       - uses: actions/setup-node@v4
         with:
           node-version: ${{ matrix.node }}
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
       # The fast lane leaves out the tests that drive a real browser. Run `npm test` on a machine with Playwright for those.
       - run: npm run test:fast
+      - run: python -B -m unittest discover -s skills/project-mapper/tests
+      - run: python -B -m unittest discover -s skills/new-scope/tests
+      - run: python -B -m unittest discover -s skills/execute-scope/tests
+      - run: python -B -m unittest discover -s skills/qa-scope/tests
       - run: node bin/100x.mjs validate --prose
       - run: node scripts/vendor-companions.mjs --check
       - run: node scripts/stamp-skills.mjs --check
       - run: node scripts/build-claude-plugin.mjs --check
+      - run: node scripts/check-distribution.mjs
       # The README diagrams are drawn by code. A change to the code or the sample run that is not redrawn fails here.
       - run: node scripts/readme-diagrams.mjs && git diff --exit-code docs/img/diagrams
