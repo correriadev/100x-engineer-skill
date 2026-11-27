@@ -4,7 +4,7 @@ import fs from 'node:fs';
 import path from 'node:path';
 import test from 'node:test';
 import { checkLedger, hashCovers, readLedger } from '../lib/verify.mjs';
-import { cli, ROOT, sandbox, write } from './helpers.mjs';
+import { cli, noFileLinks, ROOT, sandbox, write } from './helpers.mjs';
 
 const CHECKER = path.join(ROOT, 'skills', '100x', 'assets', 'property-checker.mjs');
 const sh = (cwd, command) => spawnSync('sh', ['-c', command], { cwd, encoding: 'utf8' });
@@ -86,6 +86,78 @@ test('a failing check is broken, and an exhaustive claim is refused when the che
   assert.equal(honest.code, 0, honest.out);
   assert.match(honest.out, /^pass {2}order-money\. invariant, bounded, exit 0/m);
   assert.match(verify(box, 'status').out, /^holds +order-money +invariant, bounded/);
+  box.cleanup();
+});
+
+test('bounded JSON from the shipped checker cannot support an exhaustive ledger entry', () => {
+  const { box, add } = project();
+  const checker = path.join(box.project, 'verify', 'check.mjs');
+  const source = fs.readFileSync(checker, 'utf8').replace(/  liveness: \[[\s\S]*?\n  \],/, '  liveness: [],');
+  assert.notEqual(source, fs.readFileSync(checker, 'utf8'));
+  fs.writeFileSync(checker, source);
+  write(path.join(box.project, 'verify', 'run-json.mjs'), "process.env.MAX_STATES = '6'; process.argv.push('--json'); await import('./check.mjs');\n");
+  add(['--command', 'node verify/run-json.mjs']);
+  write(path.join(box.project, 'verify', 'red', 'order-money.txt'), RED);
+  const result = verify(box, 'run');
+  assert.equal(result.code, 1, result.out);
+  assert.match(result.out, /reported BOUNDED/i);
+  assert.match(verify(box, 'status').out, /^broken +order-money/);
+  box.cleanup();
+});
+
+test('generic checks report an actual level instead of claiming proof from exit zero', () => {
+  const { box, add } = project();
+  add(['--command', 'node -e "console.log(\'all good\')"']);
+  let result = verify(box, 'run');
+  assert.equal(result.code, 1);
+  assert.match(result.out, /no verification level reported/i);
+  verify(box, 'amend', 'order-money', '--evidence', 'the check now reports its actual verification level', '--command', 'node -e "console.log(\'VERIFICATION_LEVEL: exhaustive\')"');
+  result = verify(box, 'run');
+  assert.equal(result.code, 0, result.out);
+  box.cleanup();
+});
+
+test('changed file and directory waivers go stale and require a fresh decision', () => {
+  const { box } = project();
+  const file = path.join(box.project, 'src', 'copy.mjs');
+  const child = path.join(box.project, 'layout', 'view.mjs');
+  write(file, 'export const label = "hello";\n');
+  write(child, 'export const label = "layout";\n');
+  verify(box, 'waive', 'src/copy.mjs', 'layout', '--why', 'static display text only');
+  assert.equal(verify(box, 'status').code, 0);
+  write(file, 'export const debit = (balance, amount) => balance - amount;\n');
+  write(path.join(box.project, 'layout', 'totals.mjs'), 'export const total = (a, b) => a + b;\n');
+  assert.match(verify(box, 'status').out, /^stale +waived-src-copy-mjs/m);
+  assert.match(verify(box, 'status').out, /^stale +waived-layout/m);
+  assert.equal(verify(box, 'cover', 'src/copy.mjs').code, 2);
+  assert.equal(verify(box, 'cover', 'layout/view.mjs').code, 2);
+  assert.match(checkLedger(box.project, { required: 'any' }).errors.join('\n'), /waiver.*stale/i);
+  verify(box, 'waive', 'src/copy.mjs', '--why', 'reviewed change, waiver remains justified');
+  assert.match(verify(box, 'status').out, /^waived +waived-src-copy-mjs/m);
+  assert.match(verify(box, 'history').out, /reassess/);
+  box.cleanup();
+});
+
+test('directory waivers become stale when hidden covered code changes', () => {
+  const { box } = project();
+  const hidden = path.join(box.project, 'src', '.rules.js');
+  write(hidden, 'export const allow = true;\n');
+  assert.equal(verify(box, 'waive', 'src', '--why', 'static configuration only').code, 0);
+  assert.equal(verify(box, 'status').code, 0);
+  fs.writeFileSync(hidden, 'export const allow = false;\n');
+  assert.match(verify(box, 'status').out, /^stale +waived-src/m);
+  assert.equal(verify(box, 'cover', 'src/.rules.js').code, 2);
+  box.cleanup();
+});
+
+test('a symlink inside a waived directory requires reassessment without following the link', { skip: noFileLinks }, () => {
+  const { box } = project();
+  write(path.join(box.project, 'src', 'copy.js'), 'export const label = "hi";\n');
+  write(path.join(box.project, 'elsewhere.js'), 'export const debit = () => 1;\n');
+  assert.equal(verify(box, 'waive', 'src', '--why', 'static display text only').code, 0);
+  fs.symlinkSync('../elsewhere.js', path.join(box.project, 'src', 'link.js'));
+  assert.match(verify(box, 'status').out, /stale +waived-src.*symlinks/);
+  assert.notEqual(verify(box, 'waive', 'src', '--why', 'reviewed the symlink manually').code, 0);
   box.cleanup();
 });
 

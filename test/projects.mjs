@@ -2,7 +2,7 @@ import fs from 'node:fs';
 import path from 'node:path';
 import { cli, write } from './helpers.mjs';
 import { PROMPT_MARKER } from '../lib/prompt.mjs';
-import { writeLedger } from '../lib/verify.mjs';
+import { hashCovers, writeLedger } from '../lib/verify.mjs';
 import { sealFile } from '../lib/seal.mjs';
 import { gradientPng } from './png.mjs';
 
@@ -146,7 +146,10 @@ F2 reject. intentional, the hint is decorative and the real label passes AA at 4
 export function makeProject(box, { run = runJson(), projectMd = PROJECT_MD, root = box.project, findings = FINDINGS, triage = TRIAGE, matrix = {}, checkFiles = { 'screen-sizes': CHECK_OUTPUT }, hero = PNG, judge = true, rounds = 1, sealed = true, loops = true, reviewRow = true, polished = Number.isInteger(run.polishPasses) ? run.polishPasses : 3, prompted = false, ledger = true } = {}) {
   cli(['init', '--no-git'], { cwd: root, env: box.env });
   // Property checks are on by default, so a finishable run has a ledger. The fixture has nothing to state, and says so in a waiver.
-  if (ledger) writeLedger(root, [{ id: 'waived-fixture', kind: 'waived', property: 'the fixture has no logic to state', covers: 'fixture', covers_hash: '', status: 'waived' }]);
+  if (ledger) {
+    write(path.join(root, 'fixture'), 'Static fixture text.\n');
+    writeLedger(root, [{ id: 'waived-fixture', kind: 'waived', property: 'the fixture has no logic to state', covers: 'fixture', covers_hash: hashCovers(root, ['fixture']).hash, status: 'waived' }]);
+  }
   // The run command the fixture names has to be one this folder can start.
   const manifest = path.join(root, 'package.json');
   if (/^(?:\w+=\S+\s+)*(?:npm|pnpm|yarn|bun)\s/.test(run.runCmd ?? '') && !fs.existsSync(manifest)) fs.writeFileSync(manifest, JSON.stringify({ scripts: { dev: 'vite', start: 'node server.js' } }));
