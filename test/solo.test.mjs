@@ -75,7 +75,7 @@ test('run set accepts mode solo and says mockup or solo when it is anything else
   run(box, 'init', '--no-git');
   const bad = run(box, 'run', 'set', 'mode', 'fast');
   assert.equal(bad.code, 1);
-  assert.match(bad.err, /mode can only be mockup or solo/);
+  assert.match(bad.err, /mode can only be mockup, solo or engineering/);
   assert.equal(run(box, 'run', 'set', 'mode', 'solo').code, 0);
   assert.equal(JSON.parse(fs.readFileSync(dot(box, 'run.json'), 'utf8')).mode, 'solo');
   box.cleanup();

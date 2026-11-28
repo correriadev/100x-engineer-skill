@@ -69,6 +69,10 @@ A row is **holds** (green, current, and it has failed once on a planted bug), **
 
 `run` executes the command of each row, like `npm test` runs a script of package.json. Read the ledger of a project you did not write before you run it. `status`, `cover` and `gaps` run nothing.
 
+The bundled checker reports its actual level in text or JSON. A generic command must print a line `VERIFICATION_LEVEL: exhaustive`, `VERIFICATION_LEVEL: bounded`, or `VERIFICATION_LEVEL: sampled`; exit zero alone does not establish a level. An exhaustive ledger claim is rejected when the result is bounded or sampled. Existing generic checks need to add that line before they can run successfully.
+
+Waivers bind to the covered files and their contents, including files added to a covered directory. A changed or missing path makes the waiver stale: `status`, `cover`, `gaps` and completion no longer treat it as valid. Inspect the change and use `100x verify waive <path> --why "<reason>"` to record a fresh decision, or retire it and add a property.
+
 ## When there is no rule
 
 Before an agent builds or changes code that carries logic, it runs `100x verify cover`. NO RULE starts the procedure: write the six properties, check them with the checker or a tool that fits, show each one fail on a planted bug, and record it. Code with nothing to state, such as layout or copy, gets a waiver and a reason. `100x finish` refuses an empty, stale, broken or never-failed ledger, and names the code each waiver excuses.

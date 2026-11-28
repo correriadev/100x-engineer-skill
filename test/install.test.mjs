@@ -445,8 +445,9 @@ test('skill folders that npx skills add copied count as installed: the installer
   assert.match(row('100x-status').detail, /is a copy that differs from this checkout/);
   assert.match(row('100x-status').fix, /npx skills update -g/);
   const again = install(box);
-  assert.equal(again.code, 0, 'a differing copy is a note, not a failure');
+  assert.equal(again.code, 1, 'a differing core copy must not be reported as a current installation');
   assert.match(again.out, /100x-status {2}a copy that differs from this checkout\. Refresh it with `npx skills update -g`/);
+  assert.match(again.out, /Installation incomplete/);
   assert.equal(fs.readFileSync(path.join(where.skills, '100x-status', 'SKILL.md'), 'utf8').endsWith('An older line.\n'), true, 'the copy is left as it was');
   const gone = install(box, '--uninstall');
   assert.equal(gone.code, 0);

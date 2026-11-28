@@ -21,11 +21,11 @@
   },
   "repository": {
     "type": "git",
-    "url": "git+https://github.com/DeadInternetStudios/100x-engineer-skill.git"
+    "url": "git+https://github.com/correriadev/100x-engineer-skill.git"
   },
-  "homepage": "https://github.com/DeadInternetStudios/100x-engineer-skill#readme",
+  "homepage": "https://github.com/correriadev/100x-engineer-skill#readme",
   "bugs": {
-    "url": "https://github.com/DeadInternetStudios/100x-engineer-skill/issues"
+    "url": "https://github.com/correriadev/100x-engineer-skill/issues"
   },
   "files": [
     "bin",

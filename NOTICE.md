@@ -1,5 +1,16 @@
 # Notices
 
+## Agentic Workbench
+
+Project Mapper and QA Scope were imported from `correriadev/agentic-workbench`
+at `993f624b1c138a9d7700407a5e471b5d088d3d06`. New Scope and Execute Scope
+include the proportional engineering guidance from open PR #8 at
+`b0ba80a041bbcb230360568ad41e8d66d79d1093`, based on that same main revision.
+Source: https://github.com/correriadev/agentic-workbench
+
+The source repository did not contain a license file at the imported revision.
+The repository owner requested this integration into this MIT-licensed fork.
+
 100x reuses ideas, structure and some wording from pstack under the MIT License. This file lists what came from where, and carries the upstream license text.
 
 ## pstack

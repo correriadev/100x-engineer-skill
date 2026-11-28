@@ -2,7 +2,7 @@
 
 Give your coding agent one brief and get back a prototype worth keeping. 100x writes the prompt you would have written with an hour to spare. Then it builds the thing and polishes the look. It checks the one part that must not break, and a second model reviews it in rounds. You get a report with screenshots, test results and anything still open.
 
-This plugin is the skills. They call the `100x` command line tool, which keeps the clock, takes the screenshots, runs the checks and writes the report. Install the tool as well, or the skills have nothing to call. The tool and the skills live in one open-source repository: [DeadInternetStudios/100x-engineer-skill](https://github.com/DeadInternetStudios/100x-engineer-skill).
+This plugin is the skills. They call the `100x` command line tool, which keeps the clock, takes the screenshots, runs the checks and writes the report. Install the tool as well. The integrated fork lives at [correriadev/100x-engineer-skill](https://github.com/correriadev/100x-engineer-skill), based on [DeadInternetStudios/100x-engineer-skill](https://github.com/DeadInternetStudios/100x-engineer-skill).
 
 ## Install
 
@@ -12,7 +12,7 @@ You need Claude Code, Node.js 22 or newer, and git. The skills also load in Clau
 2. Install the tool, once:
 
    ```bash
-   npm install -g github:DeadInternetStudios/100x-engineer-skill
+   npm install -g github:correriadev/100x-engineer-skill
    100x install
    ```
 
@@ -23,7 +23,7 @@ You need Claude Code, Node.js 22 or newer, and git. The skills also load in Clau
    /100x-engineer:100x Let me compare any stock with the S&P 500 in my stock market research app
    ```
 
-`100x install` sets up `~/.100x`, puts a link to `100x` in `~/.local/bin`, and links the skills into `~/.agents/skills` for agents that read that folder. It writes nothing into `~/.claude`, so the plugin's skills are the only copies Claude Code sees. `100x doctor` checks the result.
+`100x install` sets up `~/.100x`, puts a link to `100x` in `~/.local/bin`, and links the skills into `~/.agents/skills` for agents that read that folder. It writes nothing into `~/.claude`, so the plugin's skills are the only copies Claude Code sees. `100x doctor` checks the result. Mapping and engineering contracts need Python 3.12+, SQLite 3.37+ and Git. The `100x workbench` adapter runs the intact Python modules shipped with the CLI; the plugin never asks the agent to rebuild them from Markdown.
 
 ## Modes
 
@@ -48,7 +48,7 @@ What the skills tell Claude to do, all on your computer:
 
 - Run `100x` commands, your project's own build and tests, and a local dev server.
 - Take screenshots of the pages it builds with Playwright, with the browser muted.
-- Write a `.100x/` folder in your project, kept out of git. Write a `verify/` folder with the ledger of checked properties, which git tracks. Commit in your repo. It never pushes to a remote or opens a pull request.
+- Write a `.100x/` folder in your project, kept out of git. Write a `verify/` folder with the ledger of checked properties, which git tracks. Commit in your repo. It never pushes to a remote or opens a pull request unless you authorize that action.
 - Start helpers for the review and for overnight children, with Claude's own subagent tool. A helper reads and writes your project with your permissions.
 
 Only these reach the network, and only when you ask for them:
@@ -70,6 +70,6 @@ The `100x` tool has no analytics and no server of its own.
 
 ## More
 
-- Docs and source: [github.com/DeadInternetStudios/100x-engineer-skill](https://github.com/DeadInternetStudios/100x-engineer-skill)
-- Bugs and questions: [open an issue](https://github.com/DeadInternetStudios/100x-engineer-skill/issues/new)
+- Docs and source: [github.com/correriadev/100x-engineer-skill](https://github.com/correriadev/100x-engineer-skill)
+- Bugs and questions: [open an issue](https://github.com/correriadev/100x-engineer-skill/issues/new)
 - License: MIT. Parts adapt [pstack](https://github.com/cursor/plugins/tree/main/pstack), also MIT. See `NOTICE.md`.

@@ -12,7 +12,7 @@ Always, unless the owner turned it off. Property checks are on by default for ev
 - **Stage 0.** The one thing that must not break has logic, such as rules, workflows, money, scores, permissions, a state machine, a parser or a protocol. Name kind `properties` in [must-not-break.md](must-not-break.md).
 - **A property goes stale.** `100x verify status` says `stale`: the covered code changed after the last sync. Do the upkeep pass below.
 
-Code with nothing to state, such as layout, copy and glue, gets `100x verify waive <path> --why "<reason>"`. A waiver is a recorded decision, so the next run does not ask again.
+Code with nothing to state, such as layout, copy and glue, gets `100x verify waive <path> --why "<reason>"`. A changed file or a changed covered directory makes the waiver stale; inspect the change and repeat the command with a justified reason to reassess it, or retire it and add a property.
 
 ## The procedure
 
@@ -38,6 +38,7 @@ Code with nothing to state, such as layout, copy and glue, gets `100x verify wai
 4. **Tie the model to the code.** In the checker, `apply` is the project's own function and `pre` and `post` are the spec. The `guard` lines fail when the code accepts what the spec forbids or refuses what the spec allows. This is what stops a model from describing code that does not exist. In another tool, name the file and function each step stands for.
 5. **Make it fail.** For each property, seed one defect in a throwaway copy of the covered code (`mkdir -p /tmp/red && git archive HEAD | tar -x -C /tmp/red`): remove a guard, reorder a step, drop a limit. Run the check there and save the output to `verify/red/<id>.txt`. It must hold a `FAIL` line that names the defect. If the check stays green, it checks nothing: fix the check, not the defect.
 6. **Record it.** `100x verify add <id> --kind <kind> --property "<sentence>" --covers <paths> --command "<cmd>" --level <level>`, then `100x verify run <id>`. One row per property. Copy the checker into the project (for example `verify/check.mjs`) so the command is cheap and the ledger lives with the code. Add `| tee .100x/must-not-break/properties.txt` to the run when this is the must-not-break check.
+   The bundled checker reports the actual level in text or JSON. Other commands must print `VERIFICATION_LEVEL: exhaustive`, `bounded`, or `sampled`; exit zero alone does not prove a level.
 7. **Read findings as findings.** When the current code breaks a property, say it as the shortest list of steps in the code's own words and the harm in one sentence. Do not weaken the property, the model or the bound to get green, and do not change product code to hide it. A fix is a separate change.
 
 ## Blocks and the system

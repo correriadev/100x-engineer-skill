@@ -5,11 +5,11 @@
   "version": "0.1.0",
   "description": "Runs one brief from plan to a reviewed, screenshot-proven prototype with a report: build, polish, a check on the one thing that must not break, and rounds of review by a second model. Needs the separate 100x command line tool.",
   "author": {
-    "name": "Dead Internet Studios",
-    "url": "https://github.com/DeadInternetStudios"
+    "name": "correriadev",
+    "url": "https://github.com/correriadev"
   },
-  "homepage": "https://github.com/DeadInternetStudios/100x-engineer-skill",
-  "repository": "https://github.com/DeadInternetStudios/100x-engineer-skill",
+  "homepage": "https://github.com/correriadev/100x-engineer-skill",
+  "repository": "https://github.com/correriadev/100x-engineer-skill",
   "license": "MIT",
   "keywords": [
     "agent-skills",

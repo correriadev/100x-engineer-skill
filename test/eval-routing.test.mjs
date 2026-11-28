@@ -207,12 +207,14 @@ test('an answers file with no answer for the holdout set spends no look, and an 
   box.cleanup();
 });
 
-test('evals/triggers.json holds, for every skill, at least 3 prompts that call it and 2 near-misses that do not, plus 8 distractors, split into tune and holdout', () => {
+test('the historical routing set covers its listed skills and explicitly names untested imports', () => {
   const data = loadTriggers();
   const skills = installedSkills().map((s) => s.name);
   assert.equal(skills.length, fs.readdirSync(path.join(ROOT, 'skills')).filter((n) => fs.existsSync(path.join(ROOT, 'skills', n, 'SKILL.md'))).length);
   const inSet = (set) => data.prompts.filter((p) => p.set === set);
-  for (const skill of skills) {
+  assert.deepEqual([...data.excluded_skills].sort(), ['execute-scope', 'new-scope', 'project-mapper', 'qa-scope']);
+  for (const name of data.excluded_skills) assert.ok(skills.includes(name));
+  for (const skill of skills.filter((name) => !data.excluded_skills.includes(name))) {
     const should = (set) => inSet(set).filter((p) => p.expect === skill && p.near === undefined).length;
     const near = (set) => inSet(set).filter((p) => p.near === skill && p.expect !== skill).length;
     assert.ok(should('tune') >= 3, `${skill} has ${should('tune')} tune prompts that should call it, 3 are needed`);

@@ -7,6 +7,16 @@ import { makeProject, PROJECT_MD, runJson } from './projects.mjs';
 
 const finish = (box, ...args) => cli(['finish', ...args], { cwd: box.project, env: box.env });
 
+test('a prototype cannot skip its hero merely because the browser was unavailable', () => {
+  const box = sandbox();
+  const run = runJson({ hero: null, matrixSkipped: 'Browser was unavailable', mustNotBreak: { kind: 'numbers', status: 'pass', summary: '12 checks passed' } });
+  makeProject(box, { run, matrix: null, checkFiles: { numbers: '12 checks passed, no failures.\n' } });
+  const done = finish(box);
+  assert.notEqual(done.code, 0);
+  assert.match(done.err, /hero is missing/);
+  box.cleanup();
+});
+
 test('finish closes a valid run, writes the report and registers it once', () => {
   const box = sandbox();
   makeProject(box);
