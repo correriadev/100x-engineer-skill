@@ -3,6 +3,7 @@
 import argparse
 from contextlib import contextmanager
 import hashlib
+import importlib.util
 import json
 import os
 from pathlib import Path, PurePosixPath
@@ -310,6 +311,23 @@ def is_redirected(info):
             or bool(getattr(info, "st_file_attributes", 0) & stat.FILE_ATTRIBUTE_REPARSE_POINT))
 
 
+def effective_task(folder, task):
+    """Keep the published task immutable while resolving an imported project root."""
+    if folder.parent.name != 'specs' or folder.parent.parent.name != 'docs':
+        return task
+    root = folder.parent.parent.parent
+    marker = root / '.100x/evidence-root-maps' / (folder.name + '.json')
+    if not marker.exists() and not marker.is_symlink():
+        return task
+    helper = Path(__file__).resolve().parents[1] / 'qa-scope' / 'portable_evidence.py'
+    spec = importlib.util.spec_from_file_location('portable_evidence', helper)
+    module = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(module)
+    roots, _ = module.load_state(root, folder)
+    current = roots.get(task['project_path'], task['project_path'])
+    return {**task, 'project_path': current}
+
+
 def validate_task_contract(folder, document, scope, revision):
     validate_blueprint(folder, document)
     if (document["scope_revision"], document.get("qa_revision"), document["change_id"]) != (
@@ -361,8 +379,10 @@ def preflight(folder, task_id):
         raise ValueError("Unknown QA obligation")
     evidence = document.get("evidence", [])
     finished = {record["attempt_id"] for record in evidence if record.get("event") == "result"}
-    return dict(task=task, scope_revision=scope, qa_revision=revision, tasks_digest=tasks_digest,
-                blueprint_source=document.get("blueprint_source"), missing_paths=check_live_write_paths(task),
+    effective = effective_task(folder, task)
+    return dict(task=task, effective_project_path=effective['project_path'], scope_revision=scope,
+                qa_revision=revision, tasks_digest=tasks_digest,
+                blueprint_source=document.get("blueprint_source"), missing_paths=check_live_write_paths(effective),
                 qa_obligations=[obligations[key] for key in sorted(links)],
                 unfinished_attempts=[record for record in evidence if record.get("event") == "started"
                                      and record["task_id"] == task_id and record["id"] not in finished])
@@ -402,6 +422,20 @@ def validate_legacy_evidence(record, tasks, revision, obligations):
 
 
 
+def validate_runtime_artifacts(check, record):
+    paths = check.get('runtime_artifacts', [])
+    if (not isinstance(paths, list) or len(set(paths)) != len(paths)
+            or any(not isinstance(path, str) or not path or PurePosixPath(path).is_absolute()
+                   or PurePosixPath(path).as_posix() != path or '..' in PurePosixPath(path).parts
+                   or re.search(r'[\\\\:*?\x00-\x1f]', path) for path in paths)):
+        raise ValueError('Runtime artifacts must be unique project-relative file paths')
+    artifacts = record.get('runtime_artifacts', {})
+    if (not isinstance(artifacts, dict) or set(artifacts) != set(paths)
+            or any(not isinstance(value, str) or not re.fullmatch(r'sha256:[0-9a-f]{64}', value)
+                   for value in artifacts.values())):
+        raise ValueError('A check must bind every planned runtime artifact to its SHA-256 digest')
+
+
 def validate_start(record, tasks, revision, obligations):
     task = tasks[record["task_id"]]
     definition = record["definition"]
@@ -410,6 +444,7 @@ def validate_start(record, tasks, revision, obligations):
     )
     if not check or definition != {"cwd": task["project_path"], "check": check}:
         raise ValueError("Attempt definition does not match its planned check")
+    validate_runtime_artifacts(check, record)
     if (not nonempty_text(record["id"]) or record["definition_digest"] != contract_digest(definition)
         or not revision or record["qa_revision"] != revision
         or task["status"] not in ("in_progress", "completed")
@@ -430,6 +465,7 @@ def validate_result(record, start):
         or record.get("observed_values") is None
         or not text_list(record.get("test_refs"))
         or not text_list(record.get("assertions"))
+        or record.get('runtime_artifacts_after', {}) != start.get('runtime_artifacts', {})
     ):
         raise ValueError("Observed result requires stable identity and recorded observations")
 
@@ -555,7 +591,7 @@ def main():
                                    for dep in task["depends_on"]):
                                 raise ValueError("Task dependencies are incomplete")
                             if task["status"] == "in_progress":
-                                check_live_write_paths(task)
+                                check_live_write_paths(effective_task(folder, task))
                     if task_qa_ids(task) - obligations.keys():
                         raise ValueError("Unknown QA obligation")
                 evidence = indexed(value.get("evidence", []))

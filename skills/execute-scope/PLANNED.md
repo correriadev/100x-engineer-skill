@@ -53,7 +53,9 @@ supported. Each implementation task defines:
    QA and New Scope bindings. Inspect the phase, unresolved attempts, mapped
    obligations and missing paths in its response. Confirm any missing files
    are planned before allowing their creation. Inspect the active source
-   references and confirm the assertions measure the required behavior.
+   references and confirm the assertions measure the required behavior. After
+   an evidence import, execute at `effective_project_path` from preflight;
+   retain the original task path and check definition as immutable provenance.
 2. Read `<project_context>`, verify targeted unit runner command and optional build/typecheck `smoke_command`; reject unavailable/unsafe commands.
 3. Check mapped existing tests for preexisting failures and halt if found; missing-file errors for planned `[NEW]` tests do not count as RED.
 4. Snapshot working-tree files (paths, mtimes, optionally hashes) excluding `.git`, dependencies and caches to audit actual writes, not only builder claims.
@@ -139,3 +141,10 @@ Use `build` with the proposed full tasks document. Preserve prior evidence and t
 
 - **Before execution:** append `event: "started"` with unique `id` (the attempt ID), `task_id`, `check_id` (the check's `id`), `definition: {"cwd": "<project_path>", "check": <exact planned check>}`, `definition_digest`, `qa_revision`, `candidate` and `environment`. Compute the definition digest using the same canonical JSON hash as the QA revision (`contract_digest` in the helper). Include the operation correlation reference when external effects are possible. The task must already be in progress or completed for a final-candidate rerun.
 - **After execution or reconciliation:** append `event: "result"` with its own unique `id`, `attempt_id` referencing the stored start, `status` (`observed` or `inconclusive`), `candidate_after`, `environment_after`, `artifact_ref` and the observations. For observed results, include integer `exit_code`, `test_refs`, `assertions` and `observed_values`; before/after candidate and environment must match. For inconclusive results, record the diagnostic and reference the timeout log, reconciliation trace or other available artifact. Cite result IDs in the handoff.
+
+For checks with declared `runtime_artifacts`, run QA Scope's
+`runtime-artifacts --project-root ROOT --task-id TASK --check-id CHECK` before
+and after execution. Put its `artifacts` map in `runtime_artifacts` on the start
+and in `runtime_artifacts_after` on the result. Declare the actual generated
+products used by the check; the adapter cannot discover an undeclared binary.
+Record the live process or deployment and effective environment separately.

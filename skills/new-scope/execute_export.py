@@ -21,7 +21,8 @@ def load_json(path):
     return value
 
 
-def export_execute_scope(db, folder, metadata, scope_bytes):
+def export_execute_scope(db, folder, metadata, scope_bytes, root_map=None):
+    root_map = root_map or {}
     source = folder / 'context.sqlite'
     if any((folder / ('context.sqlite' + suffix)).exists() for suffix in ('-wal', '-journal')):
         raise ValueError('Close active New Scope writers before exporting')
@@ -38,8 +39,8 @@ def export_execute_scope(db, folder, metadata, scope_bytes):
     if contract and len(obligations) != len(contract.get('obligations', [])):
         raise ValueError('QA contract has duplicate obligations')
 
-    graph = Plan(db)
-    report = assess(db)
+    graph = Plan(db, root_map)
+    report = assess(db, root_map=root_map)
     tasks = {}
     reasons = {key: [] for key in graph.kinds['task']}
     global_gaps = [item['message'] for item in report['gaps'] if item['node'] == 'spec']
@@ -59,7 +60,7 @@ def export_execute_scope(db, folder, metadata, scope_bytes):
         if detail['kind'] == 'evidence' and any(item['role'] == 'production' for item in files):
             reasons[key].append('Evidence tasks cannot authorize production files.')
         for file in files:
-            current = Path(detail['project_root'])
+            current = Path(root_map.get(detail['project_root'], detail['project_root']))
             for part in Path(file['path']).parts:
                 current = current / part
                 if current.is_symlink():
@@ -82,7 +83,7 @@ def export_execute_scope(db, folder, metadata, scope_bytes):
                 continue
             try:
                 for path in check.get('files', []):
-                    repository_path(detail['project_root'], path)
+                    repository_path(root_map.get(detail['project_root'], detail['project_root']), path)
             except (OSError, ValueError):
                 reasons[key].append('Evidence check has an invalid project-relative file reference.')
             seen.add(check['id'])

@@ -14,7 +14,9 @@ const required = [
   'skills/project-mapper/scripts/requirements-csharp.txt', 'skills/project-mapper/tests/test_refresh.py',
   'skills/new-scope/contract.py', 'skills/new-scope/schema.sql', 'skills/new-scope/tests/test_execute_handoff.py',
   'skills/execute-scope/contract.py', 'skills/execute-scope/PLANNED.md', 'skills/execute-scope/tests/test_preflight.py',
-  'skills/qa-scope/contract.py', 'skills/qa-scope/tests/test_candidate_evidence.py', 'lib/commands/workbench.mjs',
+  'skills/qa-scope/contract.py', 'skills/qa-scope/portable_evidence.py',
+  'skills/qa-scope/tests/test_candidate_evidence.py', 'skills/qa-scope/tests/test_portable_identity.py',
+  'lib/commands/workbench.mjs',
 ];
 const missing = required.filter((file) => !files.has(file));
 if (missing.length) throw new Error(`Distribution is missing: ${missing.join(', ')}`);

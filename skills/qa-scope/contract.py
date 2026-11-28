@@ -7,10 +7,13 @@ import importlib.util
 import json
 import os
 from pathlib import Path
+from pathlib import PurePosixPath, PureWindowsPath
 import sys
 import tempfile
 import re
 import sqlite3
+import subprocess
+import zipfile
 
 
 def digest(data):
@@ -299,6 +302,20 @@ def validate_legacy_evidence(record, tasks, revision, obligations):
 
 
 
+def validate_runtime_artifacts(check, record):
+    paths = check.get('runtime_artifacts', [])
+    if (not isinstance(paths, list) or len(set(paths)) != len(paths)
+            or any(not isinstance(path, str) or not path or PurePosixPath(path).is_absolute()
+                   or PurePosixPath(path).as_posix() != path or '..' in PurePosixPath(path).parts
+                   or re.search(r'[\\\\:*?\x00-\x1f]', path) for path in paths)):
+        raise ValueError('Runtime artifacts must be unique project-relative file paths')
+    artifacts = record.get('runtime_artifacts', {})
+    if (not isinstance(artifacts, dict) or set(artifacts) != set(paths)
+            or any(not isinstance(value, str) or not re.fullmatch(r'sha256:[0-9a-f]{64}', value)
+                   for value in artifacts.values())):
+        raise ValueError('A check must bind every planned runtime artifact to its SHA-256 digest')
+
+
 def validate_start(record, tasks, revision, obligations):
     task = tasks[record["task_id"]]
     definition = record["definition"]
@@ -307,6 +324,7 @@ def validate_start(record, tasks, revision, obligations):
     )
     if not check or definition != {"cwd": task["project_path"], "check": check}:
         raise ValueError("Attempt definition does not match its planned check")
+    validate_runtime_artifacts(check, record)
     if (not nonempty_text(record["id"]) or record["definition_digest"] != contract_digest(definition)
         or not revision or record["qa_revision"] != revision
         or task["status"] not in ("in_progress", "completed")
@@ -327,6 +345,7 @@ def validate_result(record, start):
         or record.get("observed_values") is None
         or not text_list(record.get("test_refs"))
         or not text_list(record.get("assertions"))
+        or record.get('runtime_artifacts_after', {}) != start.get('runtime_artifacts', {})
     ):
         raise ValueError("Observed result requires stable identity and recorded observations")
 
@@ -414,8 +433,35 @@ def validate_assessment(value, scope, revision, obligations, tasks):
         raise ValueError("Assessment status contradicts its findings")
 
 
-def artifact_bindings(assessment, document):
+def artifact_reference(task, artifact):
+    if not nonempty_text(artifact) or re.match(r'^[A-Za-z][A-Za-z0-9+.-]*://', artifact):
+        raise ValueError('A local artifact snapshot is required')
+    original = task['project_path']
+    flavor = PureWindowsPath if PureWindowsPath(original).is_absolute() else PurePosixPath
+    reference = flavor(artifact)
+    if reference.is_absolute():
+        try:
+            reference = reference.relative_to(flavor(original))
+        except ValueError:
+            raise ValueError('Artifact must be within the original task project') from None
+    if not reference.parts or '..' in reference.parts:
+        raise ValueError('Artifact must be a project-relative file')
+    return reference
+
+
+def artifact_location(task, artifact, mapping):
+    root = mapped_root(task['project_path'], mapping)
+    reference = artifact_reference(task, artifact)
+    file = root.joinpath(*reference.parts).resolve(strict=True)
+    if not file.is_relative_to(root) or not file.is_file():
+        raise ValueError('Artifact must be a local file within the task project')
+    return root, reference, file
+
+
+def artifact_bindings(assessment, document, mapping=None, snapshots=None):
     """Bind local reviewed artifacts by content; never fetch untrusted remote references."""
+    mapping = root_mapping(mapping or {})
+    snapshots = snapshots or {}
     evidence = indexed(document.get('evidence', [])) if document else {}
     tasks = indexed(document.get('tasks', [])) if document else {}
     refs = {ref for finding in assessment['findings'] for ref in finding['evidence_ids']}
@@ -426,14 +472,14 @@ def artifact_bindings(assessment, document):
         artifact = record.get('artifact_ref')
         item = dict(id=key, artifact_ref=artifact, status=record.get('status'), exit_code=record.get('exit_code'))
         try:
-            if not nonempty_text(artifact) or re.match(r'^[A-Za-z][A-Za-z0-9+.-]*://', artifact):
-                raise ValueError('A local artifact snapshot is required')
             task = tasks[start['task_id']]
-            root = Path(task['project_path']).resolve(strict=True)
-            candidate = Path(artifact)
-            file = (candidate if candidate.is_absolute() else root / candidate).resolve(strict=True)
-            if not file.is_relative_to(root) or not file.is_file():
-                raise ValueError('Artifact must be a local file within the task project')
+            if key in snapshots:
+                file = snapshots[key]
+                if file.is_symlink() or not file.is_file():
+                    raise ValueError('Portable artifact snapshot is unavailable or unsafe')
+                item['local_snapshot'] = str(file)
+            else:
+                _, _, file = artifact_location(task, artifact, mapping)
             before = file.stat()
             data = file.read_bytes()
             after = file.stat()
@@ -446,14 +492,100 @@ def artifact_bindings(assessment, document):
     return bindings
 
 
-def candidate_id(root, folder, document):
-    """Fingerprint project inputs; check artifacts and runtime state need separate identity."""
+def root_mapping(value):
+    if not isinstance(value, dict) or any(not nonempty_text(k) or not nonempty_text(v) for k, v in value.items()):
+        raise ValueError('Root mapping must be an object of original and current absolute paths')
+    mapped = {}
+    for original, current in value.items():
+        path = Path(current)
+        if (not (PurePosixPath(original).is_absolute() or PureWindowsPath(original).is_absolute())
+                or not path.is_absolute() or path.is_symlink() or not path.is_dir()):
+            raise ValueError('Mapped project roots must be existing absolute directories, not symlinks')
+        mapped[original] = path.resolve(strict=True)
+    if len(set(mapped.values())) != len(mapped):
+        raise ValueError('Different original roots cannot map to the same directory')
+    return mapped
+
+
+def mapped_root(value, mapping):
+    path = mapping.get(str(value), Path(value))
+    if not path.is_absolute():
+        raise ValueError('Project roots must be absolute')
+    return path.resolve(strict=True)
+
+
+def generated_output_paths(root, policy, declared, original_root, originals):
+    if policy is None:
+        return []
+    if not isinstance(policy, dict) or set(policy) - {'generated_outputs'}:
+        raise ValueError('Invalid candidate policy')
+    raw = policy.get('generated_outputs', [])
+    if not isinstance(raw, list) or any(not nonempty_text(item) for item in raw) or len(set(raw)) != len(raw):
+        raise ValueError('Generated outputs must be a list of distinct project-relative paths')
+    flavor = PureWindowsPath if PureWindowsPath(original_root).is_absolute() else PurePosixPath
+    project_prefixes = [(PurePosixPath('.'), root)]
+    for current, original in originals.items():
+        if current == root:
+            continue
+        try:
+            if (flavor is PureWindowsPath) != PureWindowsPath(original).is_absolute():
+                continue
+            prefix = flavor(original).relative_to(flavor(original_root)).as_posix()
+        except ValueError:
+            continue
+        project_prefixes.append((PurePosixPath(prefix), current))
+    outputs = []
+    git_paths = {}
+    for item in raw:
+        relative = PurePosixPath(item)
+        if (relative.is_absolute() or relative.as_posix() != item or not relative.parts
+                or '..' in relative.parts or re.search(r'[\\:*?\x00-\x1f]', item)
+                or relative.parts[0] in {'.git', '.100x', '.project-mapper'}):
+            raise ValueError('Generated output must be a concrete project-relative path')
+        matches = [(prefix, project) for prefix, project in project_prefixes
+                   if relative == prefix or relative.is_relative_to(prefix)]
+        prefix, project = max(matches, key=lambda entry: len(entry[0].parts))
+        within = relative.relative_to(prefix)
+        if not within.parts:
+            raise ValueError('A generated output cannot exclude an entire project root')
+        current = project
+        for part in within.parts:
+            current = current / part
+            if current.is_symlink():
+                raise ValueError('Generated output path cannot traverse a symlink')
+        output = project.joinpath(*within.parts)
+        if any(source == output or source.is_relative_to(output) or output.is_relative_to(source)
+               for source in declared):
+            raise ValueError('Generated output overlaps a declared source or test path')
+        outputs.append(output)
+        git_paths.setdefault(project, []).append(within.as_posix())
+    if any(a != b and (a.is_relative_to(b) or b.is_relative_to(a)) for a in outputs for b in outputs):
+        raise ValueError('Generated output paths cannot overlap')
+    for project, paths in git_paths.items():
+        # A tracked file is an input even when it lives below a directory named
+        # like build output. Do not silently hide it from candidate identity.
+        result = subprocess.run(['git', '-C', str(project), 'ls-files', '-z', '--', *paths],
+                                capture_output=True, check=False)
+        if result.returncode == 0 and result.stdout:
+            raise ValueError('Generated output overlaps a tracked source file')
+    return outputs
+
+
+def candidate_id(root, folder, document, mapping=None):
+    """Fingerprint inputs by logical root; output and runtime identities are separate."""
     root, folder = root.resolve(strict=True), folder.resolve(strict=True)
     if not root.is_dir() or not folder.is_relative_to(root):
         raise ValueError("The change folder must be inside the project root")
-    roots = {root}
-    for task in document.get("tasks", []):
-        roots.add(Path(task["project_path"]).resolve(strict=True))
+    mapping = root_mapping(mapping or {})
+    original_root = next((key for key, value in mapping.items() if value == root), str(root))
+    roots = [root]
+    originals = {root: original_root}
+    tasks = sorted(document.get('tasks', []), key=lambda item: item.get('id', ''))
+    for task in tasks:
+        project = mapped_root(task['project_path'], mapping)
+        if project not in roots:
+            roots.append(project)
+            originals[project] = task['project_path']
     source_paths = []
     specification = folder / 'context.sqlite'
     if specification.is_symlink():
@@ -463,42 +595,63 @@ def candidate_id(root, folder, document):
             raise ValueError('New Scope specification is active; finish its transaction first')
         with sqlite3.connect(specification.resolve().as_uri() + '?mode=ro', uri=True) as db:
             db.execute('PRAGMA trusted_schema=OFF')
-            for source_root, source_path in db.execute('SELECT project_root, path FROM sources'):
-                source_root = Path(source_root).resolve(strict=True)
-                roots.add(source_root)
+            for raw_root, source_path in db.execute('SELECT project_root, path FROM sources ORDER BY id'):
+                source_root = mapped_root(raw_root, mapping)
+                if source_root not in roots:
+                    roots.append(source_root)
+                    originals[source_root] = raw_root
                 source_paths.append((source_root, source_path))
     qa, _ = read(folder / 'qa.json')
     qa_refs = [ref for obligation in (qa or {}).get('contract', {}).get('obligations', [])
                for ref in obligation.get('source_refs', []) if isinstance(ref, str)]
     always_ignored = {'.git', '.100x', '.project-mapper'}
     dependency_dirs = {'node_modules', '__pycache__', '.pytest_cache', '.venv', 'venv'}
-    result = hashlib.sha256()
-    for project in sorted(roots, key=str):
-        if not project.is_dir():
-            raise ValueError(f"Project root is not a directory: {project}")
-        result.update(b'root\0' + os.fsencode(str(project)) + b'\0')
-        declared = set()
-        for source_root, source_path in source_paths:
-            if source_root == project and not Path(source_path).is_absolute() and '..' not in Path(source_path).parts:
-                declared.add(project / source_path)
+    declared_by_project = {project: set() for project in roots}
+    for source_root, source_path in source_paths:
+        if not Path(source_path).is_absolute() and '..' not in Path(source_path).parts:
+            declared_by_project[source_root].add(source_root / source_path)
+    for project in roots:
         for ref in qa_refs:
             ref_path = Path(re.sub(r':\d+(?::\d+)?$', '', ref))
             if not ref_path.is_absolute() and '..' not in ref_path.parts and (len(ref_path.parts) > 1 or ref_path.suffix):
-                declared.add(project / ref_path)
-        for task in document.get('tasks', []):
-            if Path(task['project_path']).resolve() != project:
-                continue
-            paths = list(task.get('files_allowed', [])) + list(task.get('unit_tests', {}).get('files', []))
-            for check in task.get('evidence_checks', []):
-                paths.extend(check.get('files', []))
-            for raw in paths:
-                if isinstance(raw, str) and not Path(raw).is_absolute() and '..' not in Path(raw).parts:
-                    declared.add(project / raw)
+                declared_by_project[project].add(project / ref_path)
+    for task in tasks:
+        project = mapped_root(task['project_path'], mapping)
+        paths = list(task.get('files_allowed', [])) + list(task.get('unit_tests', {}).get('files', []))
+        for check in task.get('evidence_checks', []):
+            paths.extend(check.get('files', []))
+        for raw in paths:
+            if isinstance(raw, str) and not Path(raw).is_absolute() and '..' not in Path(raw).parts:
+                declared_by_project[project].add(project / raw)
+    all_declared = set().union(*declared_by_project.values())
+    outputs = generated_output_paths(root, (qa or {}).get('contract', {}).get('candidate_policy'),
+                                     all_declared, original_root, originals)
+    result = hashlib.sha256(b'100x-candidate-v2\0')
+    external_index = 0
+    for project in roots:
+        if not project.is_dir():
+            raise ValueError(f"Project root is not a directory: {project}")
+        flavor = PureWindowsPath if PureWindowsPath(original_root).is_absolute() else PurePosixPath
+        original = originals[project]
+        try:
+            if (flavor is PureWindowsPath) != PureWindowsPath(original).is_absolute():
+                raise ValueError('Different root flavors')
+            relative = flavor(original).relative_to(flavor(original_root))
+            label = 'project:' + (relative.as_posix() or '.')
+        except ValueError:
+            label = f'external:{external_index}'
+            external_index += 1
+        result.update(b'root\0' + label.encode('utf-8') + b'\0')
+        declared = declared_by_project[project]
         for current, dirs, files in os.walk(project, followlinks=False):
             current = Path(current)
             def included(name):
                 target = current / name
                 if name in always_ignored or target == folder:
+                    return False
+                if target != project and target in roots:
+                    return False
+                if any(target == output or target.is_relative_to(output) for output in outputs):
                     return False
                 if name not in dependency_dirs:
                     return True
@@ -508,16 +661,21 @@ def candidate_id(root, folder, document):
                 raise ValueError(f"Cannot fingerprint a symlinked source directory under {current}")
             for name in sorted(files):
                 file = current / name
+                if name in always_ignored:
+                    continue
+                if any(file == output or file.is_relative_to(output) for output in outputs):
+                    continue
                 if file.is_symlink():
                     raise ValueError(f"Cannot fingerprint a symlinked source file: {file}")
                 before = file.stat()
                 data = file.read_bytes()
                 after = file.stat()
-                if (before.st_size, before.st_mtime_ns, before.st_ino) != (after.st_size, after.st_mtime_ns, after.st_ino):
+                if (before.st_size, before.st_mtime_ns, before.st_ino, before.st_mode) != (after.st_size, after.st_mtime_ns, after.st_ino, after.st_mode):
                     raise ValueError(f"File changed while fingerprinting: {file}")
                 result.update(os.fsencode(str(file.relative_to(project))) + b'\0')
-                result.update(str(before.st_mode).encode() + b'\0' + hashlib.sha256(data).digest())
-    return 'sha256:' + result.hexdigest()
+                executable = b'executable' if before.st_mode & 0o111 else b'file'
+                result.update(executable + b'\0' + hashlib.sha256(data).digest())
+    return 'sha256:v2:' + result.hexdigest()
 
 
 def executor_module():
@@ -536,7 +694,7 @@ def plan_revision(document, executor):
     return contract_digest(definition)
 
 
-def qa_summary(folder, root, environments):
+def qa_summary(folder, root, environments, mapping=None, snapshots=None):
     scope_bytes = (folder / 'SCOPE.md').read_bytes()
     scope = digest(scope_bytes)
     qa, _ = read(folder / 'qa.json')
@@ -550,7 +708,7 @@ def qa_summary(folder, root, environments):
     obligations = validate_qa(contract, scope_bytes.decode(), folder)
     executor = executor_module()
     planned, _, blocked = executor.validate_task_contract(folder, tasks, scope, revision)
-    candidate = candidate_id(root, folder, tasks)
+    candidate = candidate_id(root, folder, tasks, mapping)
     matches = [item for item in qa.get('assessments', []) if item.get('candidate') == candidate
                and item.get('scope_revision') == scope and item.get('qa_revision') == revision]
     incomplete = [key for key, task in planned.items() if executor.task_state(task) != ('completed', 'completed')]
@@ -567,7 +725,7 @@ def qa_summary(folder, root, environments):
     assessment = matches[-1]
     validate_assessment(assessment, scope, revision, obligations, tasks)
     summary['assessment'] = assessment
-    current = {item['id']: item for item in artifact_bindings(assessment, tasks)}
+    current = {item['id']: item for item in artifact_bindings(assessment, tasks, mapping, snapshots)}
     previous = {item['id']: item for item in assessment.get('artifact_bindings', [])}
     invalid = {key for key, item in current.items()
                if 'sha256' not in item or previous.get(key, {}).get('sha256') != item['sha256']
@@ -576,6 +734,9 @@ def qa_summary(folder, root, environments):
     summary['artifact_issues'] = sorted(invalid)
     by_id = indexed(events)
     environment_issues = []
+    runtime_issues = []
+    invalid_runtime = set()
+    from portable_evidence import runtime_digests
     for finding in assessment['findings']:
         if not obligations[finding['id']]['blocking'] or finding['status'] == 'INCONCLUSIVE':
             continue
@@ -585,17 +746,28 @@ def qa_summary(folder, root, environments):
             key = f"{start['task_id']}/{start.get('check_id', '')}"
             if key not in environments or environments[key] != start.get('environment'):
                 environment_issues.append(key)
+            if start.get('runtime_artifacts'):
+                try:
+                    actual = runtime_digests(planned[start['task_id']], start['definition']['check'], mapping or {}, sys.modules[__name__])
+                    if actual != start['runtime_artifacts']:
+                        raise ValueError('Runtime artifact digest changed')
+                except (ValueError, KeyError, OSError, TypeError) as error:
+                    runtime_issues.append(dict(check=key, evidence_id=ref, reason=str(error)))
+                    invalid_runtime.add(ref)
     summary['environment_issues'] = sorted(set(environment_issues))
+    summary['runtime_artifact_issues'] = runtime_issues
     summary['environment_note'] = 'Current environments are caller-confirmed and must be observed independently.'
     effective_blocking = []
     for finding in assessment['findings']:
         if obligations[finding['id']]['blocking']:
-            effective_blocking.append('INCONCLUSIVE' if invalid.intersection(finding['evidence_ids']) else finding['status'])
+            effective_blocking.append('INCONCLUSIVE' if (invalid | invalid_runtime).intersection(finding['evidence_ids']) else finding['status'])
     summary['status'] = ('FAIL' if 'FAIL' in effective_blocking else
                          'INCONCLUSIVE' if 'INCONCLUSIVE' in effective_blocking or assessment.get('contract_gap')
                          else 'PASS')
     if invalid:
         summary['reason'] = 'Referenced artifacts are missing, inaccessible, changed or lack an assessment binding.'
+    elif invalid_runtime:
+        summary['reason'] = 'A planned runtime artifact is missing or differs from the one used by the check.'
     if assessment.get('plan_revision') != plan_revision(tasks, executor):
         summary['status'] = 'INCONCLUSIVE'
         summary['reason'] = 'The published task definitions changed or lack an assessment binding; reconcile and reassess.'
@@ -660,31 +832,62 @@ def qa_evidence(folder, candidate, obligation_id, limit):
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("folder", type=Path)
-    parser.add_argument("operation", choices=("inspect", "plan", "build", "qa-plan", "qa-check", "qa-evidence", "scope", "candidate", "summary"))
+    parser.add_argument("operation", choices=("inspect", "plan", "build", "qa-plan", "qa-check", "qa-evidence", "scope", "candidate", "summary", "runtime-artifacts", "export-evidence", "import-evidence"))
     parser.add_argument("candidate", nargs="?", help="exact execution candidate for qa-evidence")
     parser.add_argument("--obligation", help="published QA obligation for qa-evidence")
     parser.add_argument("--limit", type=int, help="maximum records per result category for qa-evidence (default 5)")
     parser.add_argument("--expect", help="Current destination file digest, or absent")
     parser.add_argument("--project-root", type=Path, help="Project root for candidate or summary")
     parser.add_argument("--environment-json", help="Current environment identities keyed by task/check for summary")
+    parser.add_argument("--root-map-json", help="Explicit original-to-current project root mapping for relocated evidence")
+    parser.add_argument("--bundle", type=Path, help="Portable evidence archive for export or import")
+    parser.add_argument("--task-id", help="Planned task for runtime-artifacts")
+    parser.add_argument("--check-id", help="Planned check for runtime-artifacts")
     args = parser.parse_args()
     folder = args.folder
-    if args.operation in ('candidate', 'summary'):
+    if args.operation in ('candidate', 'summary', 'runtime-artifacts', 'export-evidence', 'import-evidence'):
         if args.project_root is None:
             parser.error(f"{args.operation} requires --project-root")
+        from portable_evidence import export_evidence, import_evidence, load_state, merge_mapping
+        supplied = json.loads(args.root_map_json) if args.root_map_json else {}
+        if args.operation in ('export-evidence', 'import-evidence'):
+            if args.bundle is None or args.environment_json is not None:
+                parser.error('Evidence export/import requires --bundle and does not accept --environment-json')
+            if args.operation == 'import-evidence':
+                print(json.dumps(import_evidence(folder, args.project_root, args.bundle, supplied, sys.modules[__name__])))
+                return
+        elif args.bundle is not None:
+            parser.error('--bundle is supported only by evidence export and import')
+        saved, snapshots = load_state(args.project_root, folder)
+        mapping = merge_mapping(saved, supplied)
+        root_mapping(mapping)
+        if args.operation == 'runtime-artifacts':
+            if not args.task_id or not args.check_id or args.environment_json is not None:
+                parser.error('runtime-artifacts requires --task-id and --check-id')
+            from portable_evidence import runtime_digests
+            document, _ = read(folder / 'tasks.json')
+            task = indexed(document['tasks'])[args.task_id]
+            check = indexed(task.get('evidence_checks', []))[args.check_id]
+            print(json.dumps(dict(artifacts=runtime_digests(task, check, mapping, sys.modules[__name__]))))
+            return
+        if args.task_id or args.check_id:
+            parser.error('--task-id and --check-id are supported only by runtime-artifacts')
+        if args.operation == 'export-evidence':
+            print(json.dumps(export_evidence(folder, args.project_root, args.bundle, mapping, snapshots, sys.modules[__name__])))
+            return
         if args.operation == 'candidate':
             if args.environment_json is not None:
                 parser.error('--environment-json is supported only by summary')
             document, _ = read(folder / 'tasks.json')
-            print(json.dumps(dict(candidate=candidate_id(args.project_root, folder, document or {}))))
+            print(json.dumps(dict(candidate=candidate_id(args.project_root, folder, document or {}, mapping))))
         else:
             environments = json.loads(args.environment_json) if args.environment_json else {}
             if not isinstance(environments, dict):
                 raise ValueError('Current environments must be a JSON object')
-            print(json.dumps(qa_summary(folder, args.project_root, environments), ensure_ascii=False))
+            print(json.dumps(qa_summary(folder, args.project_root, environments, mapping, snapshots), ensure_ascii=False))
         return
-    if args.project_root is not None or args.environment_json is not None:
-        parser.error('--project-root and --environment-json are supported only by candidate and summary')
+    if args.project_root is not None or args.environment_json is not None or args.root_map_json is not None or args.bundle is not None or args.task_id or args.check_id:
+        parser.error('Project, environment, root mapping and bundle options are only for evidence operations')
     if args.operation == "qa-evidence":
         if not nonempty_text(args.candidate) or not nonempty_text(args.obligation):
             parser.error("qa-evidence requires a candidate and --obligation")
@@ -787,8 +990,12 @@ def main():
                 if value["id"] in indexed(assessments):
                     raise ValueError("Assessment ID already exists")
                 validate_assessment(value, scope, revision, obligations, tasks)
+                mapping, snapshots = {}, {}
+                if folder.parent.name == 'specs' and folder.parent.parent.name == 'docs':
+                    from portable_evidence import load_state
+                    mapping, snapshots = load_state(folder.parent.parent.parent, folder)
                 value = {**value, 'evidence_revision': contract_digest(tasks.get('evidence', []) if tasks else []),
-                         'artifact_bindings': artifact_bindings(value, tasks),
+                         'artifact_bindings': artifact_bindings(value, tasks, mapping, snapshots),
                          'plan_revision': plan_revision(tasks, executor_module())}
                 value = {**qa, "assessments": [*assessments, value]}
         save(folder / ("tasks.json" if task_write else "qa.json"), value)
@@ -797,5 +1004,5 @@ def main():
 if __name__ == "__main__":
     try:
         main()
-    except (ValueError, KeyError, OSError, TypeError, sqlite3.Error) as error:
+    except (ValueError, KeyError, OSError, TypeError, sqlite3.Error, zipfile.BadZipFile) as error:
         sys.exit(str(error))

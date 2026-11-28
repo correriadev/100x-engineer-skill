@@ -140,6 +140,8 @@ test('a rebuild repairs a plugin folder that holds a stale file, a deleted skill
     put('LICENSE');
     put('NOTICE.md');
     put('skills/kept/SKILL.md');
+    put('skills/qa-scope/SKILL.md');
+    put('skills/qa-scope/__pycache__/contract.cpython-312.pyc', '\0compiled');
     const at = (rel) => path.join(root, PLUGIN_DIR, rel);
     put(`${PLUGIN_DIR}/README.md`, 'mine\n');
     put(`${PLUGIN_DIR}/${ICON}`, 'icon');
@@ -151,6 +153,7 @@ test('a rebuild repairs a plugin folder that holds a stale file, a deleted skill
     assert.deepEqual(pluginProblems(root), []);
     assert.ok(!fs.existsSync(at('bin')), 'the folder the stale file sat in is gone too');
     assert.ok(!fs.existsSync(at('skills/deleted')));
+    assert.ok(!fs.existsSync(at('skills/qa-scope/__pycache__')), 'Python caches do not enter the plugin');
     assert.equal(fs.readFileSync(at('README.md'), 'utf8'), 'mine\n');
     assert.equal(fs.readFileSync(at(ICON), 'utf8'), 'icon');
     assert.equal(JSON.parse(fs.readFileSync(at('.claude-plugin/plugin.json'), 'utf8')).version, '1.2.3');

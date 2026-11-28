@@ -4,6 +4,7 @@ import copy
 import json
 import os
 from pathlib import Path
+import shutil
 import subprocess
 import sys
 import tempfile
@@ -292,6 +293,34 @@ class ScopeHandoff(unittest.TestCase):
         report = (self.root / '.100x/REPORT.md').read_text(encoding='utf-8')
         self.assertIn('Acceptance at finish: PASS', report)
         self.assertIn('.100x/evidence/output.txt', report)
+        delivery = tempfile.TemporaryDirectory()
+        self.addCleanup(delivery.cleanup)
+        bundle = Path(delivery.name) / 'evidence.zip'
+        self.call(QUALITY, 'export-evidence', '--project-root', str(self.root), '--bundle', str(bundle))
+        relocated = Path(delivery.name) / 'project'
+        shutil.copytree(self.root, relocated, ignore=shutil.ignore_patterns('.100x', '__pycache__'))
+        (self.root / 'app.py').write_text('result = 99\n', encoding='utf-8')
+        copied_folder = relocated / 'docs/specs/example'
+        def copied(cli, operation, *args):
+            result = subprocess.run([sys.executable, '-B', str(cli), str(copied_folder), operation, *args],
+                                    capture_output=True, text=True)
+            self.assertEqual(result.returncode, 0, result.stderr)
+            return json.loads(result.stdout)
+        copied(QUALITY, 'import-evidence', '--project-root', str(relocated), '--bundle', str(bundle))
+        transported = copied(QUALITY, 'summary', '--project-root', str(relocated), '--environment-json',
+                             json.dumps({'T1/check': 'local-fixture'}))
+        self.assertEqual(transported['status'], 'PASS')
+        self.assertEqual(transported['candidate'], candidate)
+        self.assertEqual(copied(EXECUTOR, 'preflight', 'T1')['effective_project_path'], str(relocated))
+        offline = self.root.with_name(self.root.name + '-offline')
+        self.root.rename(offline)
+        try:
+            self.assertTrue(copied(PLANNER, 'validate')['ready'])
+            projected = copied(PLANNER, 'export-execute-scope')
+            self.assertEqual([task['id'] for task in projected['tasks']], ['T1'])
+            self.assertEqual(projected['tasks'][0]['project_path'], str(self.root))
+        finally:
+            offline.rename(self.root)
         self.bp('apply', '--expect', '1', payload=dict(request_id='revision', reason='New decision',
                 nodes=[node('D1', 'decision', 'New decision.', 'confirmed', 'human')]))
         stale = x100('finish', '--check', ok=False)

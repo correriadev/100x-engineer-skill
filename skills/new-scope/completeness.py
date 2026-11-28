@@ -2,7 +2,7 @@
 from collections import defaultdict
 from graphlib import TopologicalSorter
 import json
-from pathlib import Path, PurePosixPath
+from pathlib import Path, PurePosixPath, PureWindowsPath
 import re
 
 
@@ -63,8 +63,9 @@ def structural_checks(db):
 
 
 class Plan:
-    def __init__(self, db):
+    def __init__(self, db, root_map=None):
         self.db = db
+        self.root_map = root_map or {}
         self.nodes = {}
         self.kinds = defaultdict(set)
         self.links = defaultdict(set)
@@ -130,8 +131,8 @@ def nonempty_names(value):
     return isinstance(value, list) and bool(value) and all(isinstance(v, str) and v.strip() for v in value)
 
 
-def assess(db, check_live_paths=True):
-    plan = Plan(db)
+def assess(db, check_live_paths=True, root_map=None):
+    plan = Plan(db, root_map)
     gaps = []
     blocked = set()
 
@@ -276,18 +277,20 @@ def check_task(plan, key, add, check_live_paths):
         if dst not in plan.nodes:
             add(key, "inactive_dependency", f"Replace retired prerequisite {dst}.")
     files = list(plan.db.execute("SELECT * FROM task_files WHERE task_id=?", (key,)))
+    project_root = plan.root_map.get(task["project_root"], task["project_root"])
     for file in files if check_live_paths else ():
         try:
-            path = repository_path(task["project_root"], file["path"])
+            path = repository_path(project_root, file["path"])
             if file["origin"] == "existing" and not path.is_file():
                 raise ValueError("Existing file was not found")
             if file["origin"] == "new" and path.exists() and not path.is_file():
                 raise ValueError("Planned file is occupied by a non-file entry")
         except (ValueError, OSError) as error:
             add(key, "ungrounded_task_path", f"{file['path']}: {error}")
-    if not Path(task["project_root"]).is_absolute():
+    if not (Path(task["project_root"]).is_absolute() or PureWindowsPath(task["project_root"]).is_absolute()):
         add(key, "ungrounded_project", "Identify an absolute project root.")
-    elif check_live_paths and not Path(task["project_root"]).is_dir():
+    elif check_live_paths and (not Path(project_root).is_absolute() or Path(project_root).is_symlink()
+                               or not Path(project_root).is_dir()):
         add(key, "ungrounded_project", "Identify an existing absolute project root.")
     if task["kind"] == "evidence":
         if not (plan.scenarios(key) or any(plan.scenarios(item) for item in obligations)):
