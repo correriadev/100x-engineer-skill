@@ -3,6 +3,7 @@
 import argparse
 from contextlib import closing
 import hashlib
+import importlib.util
 import json
 import os
 from pathlib import Path
@@ -51,14 +52,14 @@ def identifier(value):
         raise ValueError(f"Invalid identifier: {value!r}")
 
 
-def source_bytes(root, path):
-    target = repository_path(root, path)
+def source_bytes(root, path, root_map=None):
+    target = repository_path((root_map or {}).get(str(root), root), path)
     if not target.is_file():
         raise ValueError(f"Source must be a regular file: {path}")
     return target.read_bytes()
 
 
-def source_ref(args, root):
+def source_ref(args, root, logical_root=None):
     identifier(args.node)
     if not args.path:
         raise ValueError("source-ref requires a project-relative --path")
@@ -68,7 +69,7 @@ def source_ref(args, root):
         raise ValueError("--excerpt requires an explicit --lines START END range")
     data = source_bytes(root, args.path)
     digest = hashlib.sha256(data).hexdigest()
-    record = dict(id=args.node, project_root=str(root), path=args.path, sha256=digest)
+    record = dict(id=args.node, project_root=str(logical_root or root), path=args.path, sha256=digest)
     if args.expect_content_id is not None:
         expected = args.expect_content_id.lower()
         if re.fullmatch(r"sha256:[0-9a-f]{64}", expected):
@@ -98,7 +99,7 @@ def source_ref(args, root):
     return record
 
 
-def check_row(table, row, revision):
+def check_row(table, row, revision, root_map=None):
     for key in ("id", "src", "dst", "task_id", "scenario_id", "node_id", "source_id",
                 "runner_source"):
         if row.get(key) is not None:
@@ -115,7 +116,7 @@ def check_row(table, row, revision):
     if table == "nodes" and not isinstance(row.get("details", {}), dict):
         raise ValueError("Node details must be an object")
     if table == "sources":
-        data = source_bytes(row["project_root"], row["path"])
+        data = source_bytes(row["project_root"], row["path"], root_map)
         if hashlib.sha256(data).hexdigest() != row["sha256"]:
             raise ValueError(f"Source content changed: {row['path']}")
         if row.get("line_end") or row.get("excerpt"):
@@ -130,7 +131,7 @@ def check_row(table, row, revision):
             raise ValueError("Evidence requires structured observations and a prior plan revision")
 
 
-def apply(db, proposed, expected):
+def apply(db, proposed, expected, root_map=None):
     if not isinstance(proposed, dict) or set(proposed) - (TABLES.keys() | {"request_id", "reason", "remove_edges"}):
         raise ValueError("Unknown apply field")
     request_id, reason = proposed["request_id"], proposed["reason"]
@@ -178,7 +179,7 @@ def apply(db, proposed, expected):
                             or before["kind"] != after["kind"] or before["origin"] != after["origin"]
                             or (before["state"] == "confirmed" and after["state"] != "confirmed")))):
                 raise ValueError(f"Immutable record or identity: {table} {key}")
-            check_row(table, row, current)
+            check_row(table, row, current, root_map)
             if table == "evidence":
                 verify_observation(db, row)
             values = tuple(after.values())
@@ -319,6 +320,23 @@ def render(db, folder):
     return {"revision": metadata(db)["revision"], "path": str(output)}
 
 
+def portable_roots(folder):
+    root = folder.parents[2]
+    marker = root / '.100x/evidence-root-maps' / (folder.name + '.json')
+    if not marker.exists() and not marker.is_symlink():
+        return {}
+    helper = Path(__file__).resolve().parents[1] / 'qa-scope' / 'portable_evidence.py'
+    spec = importlib.util.spec_from_file_location('portable_evidence', helper)
+    module = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(module)
+    roots, _ = module.load_state(root, folder)
+    for current in roots.values():
+        path = Path(current)
+        if not path.is_absolute() or path.is_symlink() or not path.is_dir():
+            raise ValueError('Imported project root is unavailable or unsafe')
+    return roots
+
+
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("folder", type=Path)
@@ -342,9 +360,11 @@ def main():
             or folder.resolve() != folder):
         raise ValueError("Use a non-symlink docs/specs/<kebab-case-change-id> directory")
     operation = args.operation
+    root_map = portable_roots(folder)
     if operation == "source-ref":
         root = args.project_root.resolve() if args.project_root is not None else folder.parents[2]
-        print(encode(source_ref(args, root)))
+        logical = next((original for original, current in root_map.items() if Path(current).resolve() == root), root)
+        print(encode(source_ref(args, root, logical)))
         return 0
     if (args.excerpt or any(value is not None for value in
                             (args.path, args.project_root, args.symbol, args.lines, args.expect_content_id))):
@@ -372,7 +392,7 @@ def main():
         if operation == "apply":
             if args.expect is None:
                 raise ValueError("apply requires --expect with the revision read before planning")
-            result = apply(db, json.load(sys.stdin), args.expect)
+            result = apply(db, json.load(sys.stdin), args.expect, root_map)
         elif operation in {"init", "inspect"}:
             result = metadata(db)
             if operation == "inspect":
@@ -393,9 +413,9 @@ def main():
             scope = folder / "SCOPE.md"
             if scope.is_symlink() or not scope.is_file() or scope.read_bytes() != scope_text(db).encode():
                 raise ValueError("Render the current New Scope scope before exporting")
-            result = export_execute_scope(db, folder, metadata(db), scope.read_bytes())
+            result = export_execute_scope(db, folder, metadata(db), scope.read_bytes(), root_map)
         else:
-            result = assess(db)
+            result = assess(db, root_map=root_map)
             if operation == "validate":
                 problems = [row[0] for row in db.execute("PRAGMA integrity_check") if row[0] != "ok"]
                 problems.extend("Foreign key violation: " + str(tuple(row))

@@ -41,6 +41,17 @@ Group by material risk and design each obligation to expose a plausible defect u
 
 Keep useful regression checks. After a behavior change or escaped defect, vary the data, ordering or failure mode that could reveal the gap. Make decisive findings reproducible with the setup, correlation reference and expected and observed outcomes. [Quality principles](https://github.com/correriadev/agentic-workbench/blob/main/laws-of-software-engineering/quality.md)
 
+Before publishing, identify exact build outputs that would otherwise change
+the source candidate during checks. Declare only those paths in the optional
+`candidate_policy: {"generated_outputs": ["bin/Debug", "obj/Debug"]}` within
+the QA contract; paths are relative to the primary project root. The adapter
+rejects exclusions that overlap tracked files or declared source/test inputs.
+Do not assume every directory named `bin`, `build` or `dist` is disposable.
+When a check uses a built executable or other generated product, declare the
+specific project-relative files in its `runtime_artifacts` array and bind their
+digests before and after the check. Identify these files from the actual command
+and environment; the adapter cannot infer an undeclared runtime dependency.
+
 ## Output
 
 `qa.json.contract` contains `change_id`, `scope_revision`, `risk_coverage` and an `obligations` array. Record one `risk_coverage` entry per scoped material risk, with `risk_id` and nonempty `obligation_ids` resolving to obligations that cover that risk. Where no material risk warrants a QA obligation, require an explicit scope decision and include its reference and rationale in `empty_obligations_rationale`. Each obligation contains `id` (stable QA-*), `acceptance_ids`, `risk_ids`, `failure_to_detect`, `preconditions`, `stimulus`, `observables`, `assertions`, `environment`, `artifacts`, `source_refs`, `blocking` (boolean), `status` (ready or pending) and `pending_reason` (null when ready). Use nonempty arrays of strings for acceptance_ids, risk_ids, preconditions, observables, assertions, artifacts and source_refs. Use nonempty strings for failure_to_detect, stimulus and environment. Keep conditions precise enough for execute-scope to implement checks and for qa-scope check to assess their sufficiency. Preserve obligation IDs when updating the same risk and scenario. Revalidate revision before writing.
@@ -100,3 +111,6 @@ It does not establish the actual environment or prove assertions: the reviewer
 must inspect those. Source symlinks cannot be fingerprinted by this adapter.
 Artifacts must be local files within the task project; save snapshots of remote
 evidence in `.100x/` with provenance and inspect them before assessment.
+
+For runtime bindings, relocation, prior identities and portable bundles, use
+[Evidence portability](references/evidence-portability.md).

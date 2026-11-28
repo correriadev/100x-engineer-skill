@@ -2,10 +2,12 @@
 import hashlib
 import json
 from pathlib import Path
+import shutil
 import subprocess
 import sys
 import tempfile
 import unittest
+import zipfile
 
 
 SKILLS = Path(__file__).resolve().parents[2]
@@ -96,6 +98,30 @@ class CandidateEvidence(unittest.TestCase):
         payload = dict(id=f"assessment-{verdict}", candidate=candidate, scope_revision=self.scope,
                        qa_revision=self.revision, status=verdict, findings=findings)
         return self.write(QA, "qa-check", payload, "qa.json", status=status)
+
+    def export_fixture(self, artifact_ref='.100x/evidence/result.json'):
+        (self.root / 'app.py').write_text('value = 1\n', encoding='utf-8')
+        artifact = self.root / artifact_ref
+        if artifact_ref != 'app.py':
+            artifact.parent.mkdir(parents=True)
+            artifact.write_text('{"dispatch_count": 0}', encoding='utf-8')
+        candidate = self.cli(QA, 'candidate', '--project-root', str(self.root))['candidate']
+        self.record('current', {'dispatch_count': 0}, candidate=candidate, artifact_ref=artifact_ref)
+        self.task['status'], self.task['phase'] = 'completed', 'completed'
+        self.write(EXECUTOR, 'build', self.plan, 'tasks.json')
+        self.assess('PASS', ['current'], candidate=candidate)
+        destination = tempfile.TemporaryDirectory()
+        self.addCleanup(destination.cleanup)
+        bundle = Path(destination.name) / 'evidence.zip'
+        self.cli(QA, 'export-evidence', '--project-root', str(self.root), '--bundle', str(bundle))
+        moved = Path(destination.name) / 'checkout'
+        shutil.copytree(self.root, moved, ignore=shutil.ignore_patterns('.100x'))
+        return bundle, moved, candidate
+
+    def relocated_cli(self, moved, *args):
+        folder = moved / 'docs/specs/check-candidate'
+        return subprocess.run([sys.executable, '-B', str(QA), str(folder), *args],
+                              capture_output=True, text=True)
 
     def test_empty_values_are_inconclusive_and_explicit_zero_can_support_pass(self):
         self.record("empty", {})
@@ -206,6 +232,180 @@ class CandidateEvidence(unittest.TestCase):
         file.write_text('export const allow = false;\n', encoding='utf-8')
         after = self.cli(QA, 'candidate', '--project-root', str(self.root))['candidate']
         self.assertNotEqual(before, after)
+
+    def test_exported_evidence_survives_relocation_without_the_original_checkout(self):
+        bundle, moved, candidate = self.export_fixture()
+        old_root = str(self.root)
+        shutil.rmtree(self.root)
+        folder = moved / 'docs/specs/check-candidate'
+        def invoke(*args): return self.relocated_cli(moved, *args)
+        imported = invoke('import-evidence', '--project-root', str(moved), '--bundle', str(bundle))
+        self.assertEqual(imported.returncode, 0, imported.stderr)
+        self.assertEqual((moved / '.100x/evidence/result.json').read_text(), '{"dispatch_count": 0}')
+        summary = invoke('summary', '--project-root', str(moved),
+                         '--environment-json', json.dumps({'T1/check-1': 'Fixture'}))
+        self.assertEqual(summary.returncode, 0, summary.stderr)
+        restored = json.loads(summary.stdout)
+        self.assertEqual(restored['status'], 'PASS')
+        self.assertEqual(restored['candidate'], candidate)
+        self.assertFalse(Path(old_root).exists())
+        preflight = subprocess.run([sys.executable, '-B', str(EXECUTOR), str(folder), 'preflight', 'T1'],
+                                   capture_output=True, text=True)
+        self.assertEqual(preflight.returncode, 0, preflight.stderr)
+        self.assertEqual(json.loads(preflight.stdout)['effective_project_path'], str(moved))
+        no_environment = invoke('summary', '--project-root', str(moved))
+        self.assertEqual(json.loads(no_environment.stdout)['status'], 'INCONCLUSIVE')
+        (moved / '.100x/evidence/result.json').write_text('{"dispatch_count": 1}', encoding='utf-8')
+        changed = invoke('summary', '--project-root', str(moved),
+                         '--environment-json', json.dumps({'T1/check-1': 'Fixture'}))
+        self.assertEqual(json.loads(changed.stdout)['status'], 'INCONCLUSIVE')
+
+    def test_import_preserves_existing_conflicting_files(self):
+        bundle, moved, _ = self.export_fixture()
+        existing = moved / '.100x/evidence/result.json'
+        existing.parent.mkdir(parents=True)
+        existing.write_text('owner data', encoding='utf-8')
+        result = self.relocated_cli(moved, 'import-evidence', '--project-root', str(moved), '--bundle', str(bundle))
+        self.assertNotEqual(result.returncode, 0)
+        self.assertIn('overwrite', result.stderr.lower())
+        self.assertEqual(existing.read_text(), 'owner data')
+        self.assertFalse((moved / '.100x/evidence-root-maps/check-candidate.json').exists())
+
+    def test_import_rejects_changed_source_and_removes_new_evidence(self):
+        bundle, moved, _ = self.export_fixture()
+        (moved / 'app.py').write_text('value = 2\n', encoding='utf-8')
+        result = self.relocated_cli(moved, 'import-evidence', '--project-root', str(moved), '--bundle', str(bundle))
+        self.assertNotEqual(result.returncode, 0)
+        self.assertIn('do not match', result.stderr.lower())
+        self.assertEqual((moved / 'app.py').read_text(), 'value = 2\n')
+        self.assertFalse((moved / '.100x/evidence/result.json').exists())
+        self.assertFalse((moved / '.100x/evidence-root-maps/check-candidate.json').exists())
+
+    def test_import_rejects_a_tampered_object(self):
+        bundle, moved, _ = self.export_fixture()
+        with zipfile.ZipFile(bundle) as source:
+            members = {name: source.read(name) for name in source.namelist()}
+        object_name = next(name for name in members if name.startswith('objects/'))
+        members[object_name] += b'tampered'
+        altered = bundle.with_name('altered.zip')
+        with zipfile.ZipFile(altered, 'w') as output:
+            for name, data in members.items():
+                output.writestr(name, data)
+        result = self.relocated_cli(moved, 'import-evidence', '--project-root', str(moved), '--bundle', str(altered))
+        self.assertNotEqual(result.returncode, 0)
+        self.assertIn('digest mismatch', result.stderr.lower())
+        self.assertFalse((moved / '.100x/evidence-root-maps/check-candidate.json').exists())
+
+    def test_import_does_not_follow_an_evidence_directory_symlink(self):
+        bundle, moved, _ = self.export_fixture()
+        outside = moved.parent / 'outside'
+        outside.mkdir()
+        (moved / '.100x').mkdir()
+        try:
+            (moved / '.100x/evidence').symlink_to(outside, target_is_directory=True)
+        except (OSError, NotImplementedError):
+            self.skipTest('The platform cannot create symlinks')
+        result = self.relocated_cli(moved, 'import-evidence', '--project-root', str(moved), '--bundle', str(bundle))
+        self.assertNotEqual(result.returncode, 0)
+        self.assertIn('symlink', result.stderr.lower())
+        self.assertEqual(list(outside.iterdir()), [])
+
+    def test_export_refuses_an_artifact_changed_after_assessment(self):
+        bundle, _, _ = self.export_fixture()
+        (self.root / '.100x/evidence/result.json').write_text('altered', encoding='utf-8')
+        result = self.cli(QA, 'export-evidence', '--project-root', str(self.root),
+                          '--bundle', str(bundle.with_name('must-not-exist.zip')), status=1)
+        self.assertIn('missing or changed', result.lower())
+        self.assertFalse(bundle.with_name('must-not-exist.zip').exists())
+
+    def test_nonstandard_artifact_is_restored_as_a_safe_snapshot(self):
+        bundle, moved, candidate = self.export_fixture(artifact_ref='app.py')
+        result = self.relocated_cli(moved, 'import-evidence', '--project-root', str(moved), '--bundle', str(bundle))
+        self.assertEqual(result.returncode, 0, result.stderr)
+        summary = self.relocated_cli(moved, 'summary', '--project-root', str(moved),
+                                     '--environment-json', json.dumps({'T1/check-1': 'Fixture'}))
+        self.assertEqual(summary.returncode, 0, summary.stderr)
+        value = json.loads(summary.stdout)
+        self.assertEqual(value['status'], 'PASS')
+        self.assertEqual(value['candidate'], candidate)
+        snapshot = Path(value['evidence'][0]['local_snapshot'])
+        self.assertEqual(snapshot.read_text(), 'value = 1\n')
+        snapshot.write_text('altered', encoding='utf-8')
+        changed = self.relocated_cli(moved, 'summary', '--project-root', str(moved),
+                                    '--environment-json', json.dumps({'T1/check-1': 'Fixture'}))
+        self.assertEqual(json.loads(changed.stdout)['status'], 'INCONCLUSIVE')
+
+    def test_changed_runtime_binary_invalidates_evidence_even_when_build_output_is_excluded(self):
+        self.contract['candidate_policy'] = dict(generated_outputs=['bin/Debug'])
+        self.write(QA, 'qa-plan', self.contract, 'qa.json')
+        self.revision = canonical_hash(self.contract)
+        self.plan['qa_revision'] = self.revision
+        self.checks[0]['runtime_artifacts'] = ['bin/Debug/App.dll']
+        self.task['status'], self.task['phase'] = 'pending', 'evidence_pending'
+        self.write(EXECUTOR, 'plan', self.plan, 'tasks.json')
+        self.task['status'] = 'in_progress'
+        self.write(EXECUTOR, 'build', self.plan, 'tasks.json')
+        binary = self.root / 'bin/Debug/App.dll'
+        binary.parent.mkdir(parents=True)
+        binary.write_bytes(b'compiled version one')
+        binary.chmod(0o755)
+        artifact = self.root / '.100x/evidence/result.json'
+        artifact.parent.mkdir(parents=True)
+        artifact.write_text('{"dispatch_count": 0}', encoding='utf-8')
+        candidate = self.cli(QA, 'candidate', '--project-root', str(self.root))['candidate']
+        products = self.cli(QA, 'runtime-artifacts', '--project-root', str(self.root),
+                            '--task-id', 'T1', '--check-id', 'check-1')['artifacts']
+        definition = dict(cwd=str(self.root), check=self.checks[0])
+        self.plan['evidence'].append(dict(id='missing-binary', event='started', task_id='T1', check_id='check-1',
+                                          definition=definition, definition_digest=canonical_hash(definition),
+                                          qa_revision=self.revision, candidate=candidate, environment='Fixture'))
+        error = self.write(EXECUTOR, 'build', self.plan, 'tasks.json', status=1)
+        self.assertIn('bind every planned runtime artifact', error)
+        self.plan['evidence'].pop()
+        self.plan['evidence'].append(dict(id='start-binary', event='started', task_id='T1', check_id='check-1',
+                                          definition=definition, definition_digest=canonical_hash(definition),
+                                          qa_revision=self.revision, candidate=candidate, environment='Fixture',
+                                          runtime_artifacts=products))
+        self.write(EXECUTOR, 'build', self.plan, 'tasks.json')
+        self.plan['evidence'].append(dict(id='binary', event='result', attempt_id='start-binary', status='observed',
+                                          candidate_after=candidate, environment_after='Fixture', exit_code=0,
+                                          artifact_ref='.100x/evidence/result.json', test_refs=['test_no_dispatch'],
+                                          assertions=['Expect zero.'], observed_values={'dispatch_count': 0},
+                                          runtime_artifacts_after=products))
+        self.plan['evidence'][-1]['runtime_artifacts_after'] = {'bin/Debug/App.dll': 'sha256:' + '0' * 64}
+        error = self.write(EXECUTOR, 'build', self.plan, 'tasks.json', status=1)
+        self.assertIn('stable identity', error)
+        self.plan['evidence'][-1]['runtime_artifacts_after'] = products
+        self.write(EXECUTOR, 'build', self.plan, 'tasks.json')
+        self.task['status'], self.task['phase'] = 'completed', 'completed'
+        self.write(EXECUTOR, 'build', self.plan, 'tasks.json')
+        self.assess('PASS', ['binary'], candidate=candidate)
+        args = ('summary', '--project-root', str(self.root), '--environment-json',
+                json.dumps({'T1/check-1': 'Fixture'}))
+        self.assertEqual(self.cli(QA, *args)['status'], 'PASS')
+        destination = tempfile.TemporaryDirectory()
+        self.addCleanup(destination.cleanup)
+        bundle = Path(destination.name) / 'runtime.zip'
+        self.cli(QA, 'export-evidence', '--project-root', str(self.root), '--bundle', str(bundle))
+        moved = Path(destination.name) / 'checkout'
+        shutil.copytree(self.root, moved, ignore=shutil.ignore_patterns('.100x', 'bin'))
+        imported = self.relocated_cli(moved, 'import-evidence', '--project-root', str(moved), '--bundle', str(bundle))
+        self.assertEqual(imported.returncode, 0, imported.stderr)
+        self.assertEqual((moved / 'bin/Debug/App.dll').read_bytes(), b'compiled version one')
+        if sys.platform != 'win32':
+            self.assertTrue((moved / 'bin/Debug/App.dll').stat().st_mode & 0o111)
+        relocated = self.relocated_cli(moved, 'summary', '--project-root', str(moved), '--environment-json',
+                                       json.dumps({'T1/check-1': 'Fixture'}))
+        self.assertEqual(json.loads(relocated.stdout)['status'], 'PASS')
+        (moved / 'bin/Debug/App.dll').write_bytes(b'compiled version two')
+        relocated = self.relocated_cli(moved, 'summary', '--project-root', str(moved), '--environment-json',
+                                       json.dumps({'T1/check-1': 'Fixture'}))
+        self.assertEqual(json.loads(relocated.stdout)['status'], 'INCONCLUSIVE')
+        binary.write_bytes(b'compiled version two')
+        self.assertEqual(self.cli(QA, 'candidate', '--project-root', str(self.root))['candidate'], candidate)
+        changed = self.cli(QA, *args)
+        self.assertEqual(changed['status'], 'INCONCLUSIVE')
+        self.assertTrue(changed['runtime_artifact_issues'])
 
 
 if __name__ == "__main__":
